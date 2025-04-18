@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timesheet and Job Management</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @media print {
+            .no-print, .no-print * {
+                display: none !important;
+            }
+            body {
+                background: white;
+                color: black;
+            }
+            .print-container {
+                width: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+            }
+            th, td {
+                border: 1px solid black;
+                padding: 8px;
+                text-align: left;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState } = React;
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [users, setUsers] = useState([
+                { username: "admin", password: "admin123", role: "admin" },
+                { username: "manager", password: "manager123", role: "manager" }
+            ]);
+            const [jobs, setJobs] = useState([]);
+            const [inventory, setInventory] = useState([
+                { id: 1, name: "Truck #1", type: "Truck", status: "Off Job", condition: "New", tagExpiration: "6/15/25", notes: "", lastUpdated: new Date().toLocaleString() },
+                { id: 2, name: "Hose #1", type: "Hose", status: "Off Job", condition: "Used", details: "0.04", notes: "", lastUpdated: new Date().toLocaleString() },
+                { id: 3, name: "Pump #1", type: "Pump", status: "Down", condition: "Needs Repair", tagExpiration: "5/10/25", notes: "", lastUpdated: new Date().toLocaleString() }
+            ]);
+            const [pipeInventory, setPipeInventory] = useState({
+                polyPipe: 10.0,
+                layflat10: 10.0,
+                layflat12: 10.0,
+                crossings: 50
+            });
+
+            const handleLogin = (username, password) => {
+                const foundUser = users.find(
+                    u => u.username === username && u.password === password
+                );
+                if (foundUser) {
+                    setUser({ name: foundUser.username, role: foundUser.role });
+                } else {
+                    alert("Invalid credentials");
+                }
+            };
+
+            const addUser = (newUser) => {
+                setUsers([...users, newUser]);
+            };
+
+            const addJob = (job) => {
+                setJobs([...jobs, { ...job, id: jobs.length + 1, status: "running", lastUpdated: new Date().toLocaleString(), notesList: [], assignedPipes: [], assignedInventory: [] }]);
+            };
+
+            const updateJob = (updatedJob) => {
+                setJobs(jobs.map(job => job.id === updatedJob.id ? { ...updatedJob, lastUpdated: new Date().toLocaleString() } : job));
+            };
+
+            const toggleJobStatus = (jobId, returnPipes) => {
+                setJobs(jobs.map(job => {
+                    if (job.id === jobId) {
+                        const newStatus = job.status === "running" ? "completed" : "running";
+                        if (newStatus === "completed") {
+                            // Reset equipment to Off Job
+                            setInventory(inventory.map(item => 
+                                job.assignedInventory.some(ai => ai.inventoryId === item.id) 
+                                ? { ...item, status: "Off Job", lastUpdated: new Date().toLocaleString() }
+                                : item
+                            ));
+                            // Optionally return pipes/crossings
+                            if (returnPipes) {
+                                job.assignedPipes.forEach(pipe => {
+                                    if (pipe.pipeType === "crossings") {
+                                        setPipeInventory(prev => ({
+                                            ...prev,
+                                            crossings: prev.crossings + pipe.quantity
+                                        }));
+                                    } else {
+                                        const miles = pipe.unit === "feet" ? pipe.quantity / 5280 : pipe.quantity;
+                                        setPipeInventory(prev => ({
+                                            ...prev,
+                                            [pipe.pipeType]: prev[pipe.pipeType] + miles
+                                        }));
+                                    }
+                                });
+                            }
+                        }
+                        return { ...job, status: newStatus, lastUpdated: new Date().toLocaleString() };
+                    }
+                    return job;
+                }));
+            };
+
+            const assignPipe = (jobId, pipeType, quantity, unit, notes) => {
+                if (pipeType === "crossings") {
+                    if (quantity <= pipeInventory.crossings) {
+                        setPipeInventory(prev => ({ ...prev, crossings: prev.crossings - quantity }));
+                    } else {
+                        alert(`Not enough crossings available. Available: ${pipeInventory.crossings}`);
+                        return;
+                    }
+                } else {
+                    const miles = unit === "feet" ? quantity / 5280 : quantity;
+                    if (miles <= pipeInventory[pipeType]) {
+                        setPipeInventory(prev => ({
+                            ...prev,
+                            [pipeType]: Math.max(0, prev[pipeType] - miles)
+                        }));
+                    } else {
+                        alert(`Not enough ${pipeType === 'polyPipe' ? 'Poly Pipe' : pipeType === 'layflat10' ? '10" Layflat Hose' : '12" Layflat Hose'} available. Available: ${pipeInventory[pipeType].toFixed(2)} miles`);
+                        return;
+                    }
+                }
+                setJobs(jobs.map(job => 
+                    job.id === jobId 
+                    ? { 
+                        ...job, 
+                        assignedPipes: [...(job.assignedPipes || []), { pipeType, quantity, unit, notes, timestamp: new Date().toLocaleString() }],
+                        lastUpdated: new Date().toLocaleString()
+                      } 
+                    : job
+                ));
+            };
+
+            const assignInventory = (jobId, inventoryId, notes) => {
+                setJobs(jobs.map(job => 
+                    job.id === jobId 
+                    ? { ...job, assignedInventory: [...(job.assignedInventory || []), { inventoryId, notes }] } 
+                    : job
+                ));
+                setInventory(inventory.map(item => 
+                    item.id === inventoryId ? { ...item, status: "On Job", lastUpdated: new Date().toLocaleString() } : item
+                ));
+            };
+
+            const addInventory = (item) => {
+                setInventory([...inventory, { ...item, id: inventory.length + 1, lastUpdated: new Date().toLocaleString() }]);
+            };
+
+            const updateInventory = (updatedItem) => {
+                setInventory(inventory.map(item => 
+                    item.id === updatedItem.id ? { ...updatedItem, lastUpdated: new Date().toLocaleString() } : item
+                ));
+            };
+
+            const deleteInventory = (id) => {
+                setInventory(inventory.filter(item => item.id !== id));
+            };
+
+            const updatePipeInventory = (newTotals) => {
+                setPipeInventory({
+                    polyPipe: Math.max(0, parseFloat(newTotals.polyPipe) || 0),
+                    layflat10: Math.max(0, parseFloat(newTotals.layflat10) || 0),
+                    layflat12: Math.max(0, parseFloat(newTotals.layflat12) || 0),
+                    crossings: Math.max(0, parseInt(newTotals.crossings) || 0)
+                });
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100">
+                    {user ? (
+                        <Dashboard 
+                            user={user} 
+                            setUser={setUser} 
+                            users={users}
+                            addUser={addUser}
+                            jobs={jobs} 
+                            addJob={addJob} 
+                            updateJob={updateJob} 
+                            toggleJobStatus={toggleJobStatus}
+                            inventory={inventory}
+                            pipeInventory={pipeInventory}
+                            assignPipe={assignPipe}
+                            assignInventory={assignInventory}
+                            addInventory={addInventory}
+                            updateInventory={updateInventory}
+                            deleteInventory={deleteInventory}
+                            updatePipeInventory={updatePipeInventory}
+                        />
+                    ) : (
+                        <LoginScreen onLogin={handleLogin} />
+                    )}
+                </div>
+            );
+        };
+
+        const LoginScreen = ({ onLogin }) => {
+            const [username, setUsername] = useState("");
+            const [password, setPassword] = useState("");
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onLogin(username, password);
+            };
+
+            return (
+                <div className="flex items-center justify-center min-h-screen">
+                    <div className="bg-white p-8 rounded shadow-md w-96">
+                        <h1 className="text-2xl font-bold mb-6 text-center">Login</h1>
+                        <form onSubmit={handleSubmit}>
+                            <div className="mb-4">
+                                <label className="block text-gray-700">Username</label>
+                                <input
+                                    type="text"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    className="w-full p-2 border rounded"
+                                />
+                            </div>
+                            <div className="mb-6">
+                                <label className="block text-gray-700">Password</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="w-full p-2 border rounded"
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
+                            >
+                                Login
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        const Dashboard = ({ user, setUser, users, addUser, jobs, addJob, updateJob, toggleJobStatus, inventory, pipeInventory, assignPipe, assignInventory, addInventory, updateInventory, deleteInventory, updatePipeInventory }) => {
+            const [showCreateJob, setShowCreateJob] = useState(false);
+            const [selectedJobId, setSelectedJobId] = useState(null);
+            const [showInventory, setShowInventory] = useState(false);
+            const [showUserManagement, setShowUserManagement] = useState(false);
+            const [activeTab, setActiveTab] = useState("running");
+
+            if (showUserManagement && user.role === "admin") {
+                return (
+                    <UserManagement
+                        users={users}
+                        addUser={addUser}
+                        onBack={() => setShowUserManagement(false)}
+                    />
+                );
+            }
+
+            if (showInventory) {
+                return (
+                    <InventoryManagement
+                        user={user}
+                        inventory={inventory}
+                        pipeInventory={pipeInventory}
+                        addInventory={addInventory}
+                        updateInventory={updateInventory}
+                        deleteInventory={deleteInventory}
+                        updatePipeInventory={updatePipeInventory}
+                        onBack={() => setShowInventory(false)}
+                    />
+                );
+            }
+
+            if (selectedJobId) {
+                const selectedJob = jobs.find(job => job.id === selectedJobId);
+                return (
+                    <JobDetails 
+                        job={selectedJob} 
+                        updateJob={updateJob} 
+                        toggleJobStatus={toggleJobStatus}
+                        inventory={inventory}
+                        pipeInventory={pipeInventory}
+                        assignPipe={assignPipe}
+                        assignInventory={assignInventory}
+                        onBack={() => setSelectedJobId(null)}
+                    />
+                );
+            }
+
+            return (
+                <div className="p-6">
+                    <div className="flex justify-between items-center mb-6">
+                        <h1 className="text-3xl font-bold">
+                            Welcome, {user.name} ({user.role})
+                        </h1>
+                        <button
+                            onClick={() => setUser(null)}
+                            className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 no-print"
+                        >
+                            Logout
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">Total Jobs</h2>
+                            <p className="text-2xl">{jobs.filter(job => job.status === "running").length} Running / {jobs.filter(job => job.status === "completed").length} Completed</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">Available Equipment</h2>
+                            <p className="text-2xl">{inventory.filter(item => item.status !== "Down").length}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">Down Equipment</h2>
+                            <p className="text-2xl">{inventory.filter(item => item.status === "Down").length}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">Poly Pipe (miles)</h2>
+                            <p className="text-2xl">{pipeInventory.polyPipe.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">10" Layflat Hose (miles)</h2>
+                            <p className="text-2xl">{pipeInventory.layflat10.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">12" Layflat Hose (miles)</h2>
+                            <p className="text-2xl">{pipeInventory.layflat12.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded shadow">
+                            <h2 className="text-xl font-semibold">Crossings (count)</h2>
+                            <p className="text-2xl">{pipeInventory.crossings}</p>
+                        </div>
+                    </div>
+                    <div className="mb-4 flex gap-4 no-print">
+                        <button
+                            onClick={() => setShowCreateJob(true)}
+                            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                        >
+                            Create Job
+                        </button>
+                        <button
+                            onClick={() => setShowInventory(true)}
+                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                        >
+                            Inventory
+                        </button>
+                        {user.role === "admin" && (
+                            <button
+                                onClick={() => setShowUserManagement(true)}
+                                className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600"
+                            >
+                                Manage Users
+                            </button>
+                        )}
+                    </div>
+                    {showCreateJob && (
+                        <CreateJobForm onSubmit={addJob} onCancel={() => setShowCreateJob(false)} />
+                    )}
+                    <div className="mb-4 no-print">
+                        <button
+                            onClick={() => setActiveTab("running")}
+                            className={`px-4 py-2 rounded ${activeTab === "running" ? "bg-blue-500 text-white" : "bg-gray-200"} mr-2`}
+                        >
+                            Running Jobs
+                        </button>
+                        <button
+                            onClick={() => setActiveTab("completed")}
+                            className={`px-4 py-2 rounded ${activeTab === "completed" ? "bg-blue-500 text-white" : "bg-gray-200"}`}
+                        >
+                            Completed Jobs
+                        </button>
+                    </div>
+                    <JobList 
+                        jobs={jobs.filter(job => job.status === activeTab)} 
+                        onSelectJob={setSelectedJobId} 
+                    />
+                </div>
+            );
+        };
+
+        const UserManagement = ({ users, addUser, onBack }) => {
+            const [newUser, setNewUser] = useState({
+                username: "",
+                password: "",
+                role: "manager"
+            });
+
+            const handleChange = (e) => {
+                setNewUser({ ...newUser, [e.target.name]: e.target.value });
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (users.some(u => u.username === newUser.username)) {
+                    alert("Username already exists");
+                    return;
+                }
+                if (!newUser.username || !newUser.password) {
+                    alert("Username and password are required");
+                    return;
+                }
+                addUser(newUser);
+                setNewUser({ username: "", password: "", role: "manager" });
+            };
+
+            return (
+                <div className="p-6">
+                    <div className="flex justify-between items-center mb-6 no-print">
+                        <h1 className="text-3xl font-bold">User Management</h1>
+                        <button
+                            onClick={onBack}
+                            className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+                        >
+                            Back to Dashboard
+                        </button>
+                    </div>
+                    <div className="bg-white p-6 rounded shadow mb-6 no-print">
+                        <h2 className="text-xl font-semibold mb-4">Add New User</h2>
+                        <form onSubmit={handleSubmit}>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-gray-700">Username</label>
+                                    <input
+                                        type="text"
+                                        name="username"
+                                        value={newUser.username}
+                                        onChange={handleChange}
+                                        className="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700">Password</label>
+                                    <input
+                                        type="password"
+                                        name="password"
+                                        value={newUser.password}
+                                        onChange={handleChange}
+                                        className="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700">Role</label>
+                                    <select
+                                        name="role"
+                                        value={newUser.role}
+                                        onChange={handleChange}
+                                        className="w-full p-2 border rounded"
+                                    >
+                                        <option value="manager">Manager</option>
+                                        <option value="admin">Admin</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div className="mt-4 flex justify-end gap-2">
+                                <button
+                                    type="submit"
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Add User
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    <div className="bg-white rounded shadow overflow-x-auto">
+                        <table className="min-w-full">
+                            <thead>
+                                <tr className="bg-gray-200">
+                                    <th className="p-3 text-left">Username</th>
+                                    <th className="p-3 text-left">Role</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {users.map((u, index) => (
+                                    <tr key={index} className="border-t">
+                                        <td className="p-3">{u.username}</td>
+                                        <td className="p-3">{u.role}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const CreateJobForm = ({ onSubmit, onCancel }) => {
+            const [job, setJob] = useState({
+                name: "",
+                number: "",
+                location: "",
+                companyMan: "",
+                phone: "",
+                notes: ""
+            });
+
+            const handleChange = (e) => {
+                setJob({ ...job, [e.target.name]: e.target.value });
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onSubmit(job);
+                onCancel();
+            };
+
+            return (
+                <div className="bg-white p-6 rounded shadow mb-6 no-print">
+                    <h2 className="text-xl font-semibold mb-4">Create New Job</h2>
+                    <form onSubmit={handleSubmit}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-gray-700">Job Name</label>
+                                <input
+                                    type="text"
+                                    name="name"
+                                    value={job.name}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Job Number</label>
+                                <input
+                                    type="text"
+                                    name="number"
+                                    value={job.number}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Location</label>
+                                <input
+                                    type="text"
+                                    name="location"
+                                    value={job.location}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Company Man</label>
+                                <input
+                                    type="text"
+                                    name="companyMan"
+                                    value={job.companyMan}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Phone Number</label>
+                                <input
+                                    type="text"
+                                    name="phone"
+                                    value={job.phone}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                />
+                            </div>
+                        </div>
+                        <div className="mt-4">
+                            <label className="block text-gray-700">Notes</label>
+                            <textarea
+                                name="notes"
+                                value={job.notes}
+                                onChange={handleChange}
+                                className="w-full p-2 border rounded"
+                                rows="4"
+                            ></textarea>
+                        </div>
+                        <div className="mt-4 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                Save Job
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        };
+
+        const JobList = ({ jobs, onSelectJob }) => {
+            return (
+                <div className="bg-white rounded shadow overflow-x-auto">
+                    <table className="min-w-full">
+                        <thead>
+                            <tr className="bg-gray-200">
+                                <th className="p-3 text-left">Job Name</th>
+                                <th className="p-3 text-left">Number</th>
+                                <th className="p-3 text-left">Location</th>
+                                <th className="p-3 text-left">Company Man</th>
+                                <th className="p-3 text-left">Phone</th>
+                                <th className="p-3 text-left">Notes</th>
+                                <th className="p-3 text-left">Last Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {jobs.length === 0 ? (
+                                <tr>
+                                    <td colSpan="7" className="p-3 text-center text-gray-500">
+                                        No jobs available
+                                    </td>
+                                </tr>
+                            ) : (
+                                jobs.map((job) => (
+                                    <tr 
+                                        key={job.id} 
+                                        className="border-t hover:bg-gray-100 cursor-pointer" 
+                                        onClick={() => onSelectJob(job.id)}
+                                    >
+                                        <td className="p-3">{job.name}</td>
+                                        <td className="p-3">{job.number}</td>
+                                        <td className="p-3">{job.location}</td>
+                                        <td className="p-3">{job.companyMan || '-'}</td>
+                                        <td className="p-3">{job.phone || '-'}</td>
+                                        <td className="p-3">{job.notes || '-'}</td>
+                                        <td className="p-3">{job.lastUpdated}</td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            );
+        };
+
+        const JobDetails = ({ job, updateJob, toggleJobStatus, inventory, pipeInventory, assignPipe, assignInventory, onBack }) => {
+            const [isEditing, setIsEditing] = useState(false);
+            const [editedJob, setEditedJob] = useState(job);
+            const [newNote, setNewNote] = useState("");
+            const [selectedPipeType, setSelectedPipeType] = useState("");
+            const [pipeQuantity, setPipeQuantity] = useState("");
+            const [pipeUnit, setPipeUnit] = useState("miles");
+            const [pipeNote, setPipeNote] = useState("");
+            const [selectedInventory, setSelectedInventory] = useState("");
+            const [inventoryNote, setInventoryNote] = useState("");
+            const [returnPipes, setReturnPipes] = useState(true);
+
+            const handleEditChange = (e) => {
+                setEditedJob({ ...editedJob, [e.target.name]: e.target.value });
+            };
+
+            const handleSave = (e) => {
+                e.preventDefault();
+                updateJob({ ...editedJob, notesList: editedJob.notesList || [], assignedPipes: editedJob.assignedPipes || [], assignedInventory: editedJob.assignedInventory || [] });
+                setIsEditing(false);
+            };
+
+            const addNote = () => {
+                if (newNote.trim()) {
+                    updateJob({ 
+                        ...job, 
+                        notesList: [...(job.notesList || []), { text: newNote, timestamp: new Date().toLocaleString() }] 
+                    });
+                    setNewNote("");
+                }
+            };
+
+            const handleAssignPipe = () => {
+                if (selectedPipeType && pipeQuantity && !isNaN(pipeQuantity) && parseFloat(pipeQuantity) > 0) {
+                    const quantity = selectedPipeType === "crossings" ? parseInt(pipeQuantity) : parseFloat(pipeQuantity);
+                    assignPipe(job.id, selectedPipeType, quantity, selectedPipeType === "crossings" ? "count" : pipeUnit, pipeNote);
+                    setSelectedPipeType("");
+                    setPipeQuantity("");
+                    setPipeUnit("miles");
+                    setPipeNote("");
+                } else {
+                    alert("Please select a pipe type and enter a valid quantity.");
+                }
+            };
+
+            const handleAssignInventory = () => {
+                if (selectedInventory) {
+                    assignInventory(job.id, parseInt(selectedInventory), inventoryNote);
+                    setSelectedInventory("");
+                    setInventoryNote("");
+                }
+            };
+
+            const handlePrint = () => {
+                window.print();
+            };
+
+            return (
+                <div className="p-6 print-container">
+                    <div className="flex justify-between items-center mb-6 no-print">
+                        <h1 className="text-3xl font-bold">{job.name} Details</h1>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={onBack}
+                                className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+                            >
+                                Back to Dashboard
+                            </button>
+                            <button
+                                onClick={handlePrint}
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                Print Job
+                            </button>
+                        </div>
+                    </div>
+                    {isEditing ? (
+                        <form onSubmit={handleSave} className="bg-white p-6 rounded shadow mb-6 no-print">
+                            <h2 className="text-xl font-semibold mb-4">Edit Job</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-gray-700">Job Name</label>
+                                    <input
+                                        type="text"
+                                        name="name"
+                                        value={editedJob.name}
+                                        onChange={handleEditChange}
+                                        className="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700">Job Number</label>
+                                    <input
+                                        type="text"
+                                        name="number"
+                                        value={editedJob.number}
+                                        onChange={handleEditChange}
+                                        className="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700">Location</label>
+                                    <input
+                                        type="text"
+                                        name="location"
+                                        value={editedJob.location}
+                                        onChange={handleEditChange}
+                                        className="w-full p-2 border rounded"
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700">Company Man</label>
+                                    <input
+                                        type="text"
+                                        name="companyMan"
+                                        value={editedJob.companyMan}
+                                        onChange={handleEditChange}
+                                        className="w-full p-2 border rounded"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-gray-700">Phone Number</label>
+                                    <input
+                                        type="text"
+                                        name="phone"
+                                        value={editedJob.phone}
+                                        onChange={handleEditChange}
+                                        className="w-full p-2 border rounded"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-4">
+                                <label className="block text-gray-700">Notes</label>
+                                <textarea
+                                    name="notes"
+                                    value={editedJob.notes}
+                                    onChange={handleEditChange}
+                                    className="w-full p-2 border rounded"
+                                    rows="4"
+                                ></textarea>
+                            </div>
+                            <div className="mt-4 flex justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsEditing(false)}
+                                    className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Save Changes
+                                </button>
+                            </div>
+                        </form>
+                    ) : (
+                        <div className="bg-white p-6 rounded shadow mb-6">
+                            <h2 className="text-xl font-semibold mb-4">Job Details</h2>
+                            <p><strong>Name:</strong> {job.name}</p>
+                            <p><strong>Number:</strong> {job.number}</p>
+                            <p><strong>Location:</strong> {job.location}</p>
+                            <p><strong>Company Man:</strong> {job.companyMan || '-'}</p>
+                            <p><strong>Phone:</strong> {job.phone || '-'}</p>
+                            <p><strong>Notes:</strong> {job.notes || '-'}</p>
+                            <p><strong>Status:</strong> {job.status === "running" ? "Running" : "Completed"}</p>
+                            <p><strong>Last Updated:</strong> {job.lastUpdated}</p>
+                            <div className="mt-4 flex gap-2 no-print">
+                                <button
+                                    onClick={() => setIsEditing(true)}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Edit Job
+                                </button>
+                                <button
+                                    onClick={() => toggleJobStatus(job.id, returnPipes)}
+                                    className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600"
+                                >
+                                    {job.status === "running" ? "Mark as Completed" : "Reopen Job"}
+                                </button>
+                                {job.status === "running" && (
+                                    <label className="flex items-center">
+                                        <input
+                                            type="checkbox"
+                                            checked={returnPipes}
+                                            onChange={(e) => setReturnPipes(e.target.checked)}
+                                            className="mr-2"
+                                        />
+                                        Return Pipes/Crossings on Completion
+                                    </label>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                    <div className="bg-white p-6 rounded shadow mb-6">
+                        <h2 className="text-xl font-semibold mb-4">Job Notes</h2>
+                        <div className="mb-4 no-print">
+                            <textarea
+                                value={newNote}
+                                onChange={(e) => setNewNote(e.target.value)}
+                                className="w-full p-2 border rounded"
+                                rows="3"
+                                placeholder="Add a note..."
+                            ></textarea>
+                            <button
+                                onClick={addNote}
+                                className="mt-2 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                            >
+                                Add Note
+                            </button>
+                        </div>
+                        {job.notesList && job.notesList.length > 0 ? (
+                            <ul className="list-disc pl-5">
+                                {job.notesList.map((note, index) => (
+                                    <li key={index}>
+                                        {note.text} <span className="text-gray-500">({note.timestamp})</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-gray-500">No notes added.</p>
+                        )}
+                    </div>
+                    <div className="bg-white p-6 rounded shadow mb-6">
+                        <h2 className="text-xl font-semibold mb-4">Assigned Pipes/Crossings</h2>
+                        <div className="mb-4 flex gap-4 flex-wrap no-print">
+                            <select
+                                value={selectedPipeType}
+                                onChange={(e) => { 
+                                    setSelectedPipeType(e.target.value);
+                                    setPipeUnit(e.target.value === "crossings" ? "count" : "miles");
+                                }}
+                                className="p-2 border rounded"
+                            >
+                                <option value="">Select Type</option>
+                                <option value="polyPipe">Poly Pipe</option>
+                                <option value="layflat10">10" Layflat Hose</option>
+                                <option value="layflat12">12" Layflat Hose</option>
+                                <option value="crossings">Crossings</option>
+                            </select>
+                            <input
+                                type="number"
+                                value={pipeQuantity}
+                                onChange={(e) => setPipeQuantity(e.target.value)}
+                                className="p-2 border rounded w-24"
+                                placeholder="Quantity"
+                                min="0"
+                                step={selectedPipeType === "crossings" ? "1" : "0.01"}
+                            />
+                            {selectedPipeType !== "crossings" && (
+                                <select
+                                    value={pipeUnit}
+                                    onChange={(e) => setPipeUnit(e.target.value)}
+                                    className="p-2 border rounded"
+                                >
+                                    <option value="miles">Miles</option>
+                                    <option value="feet">Feet</option>
+                                </select>
+                            )}
+                            <input
+                                type="text"
+                                value={pipeNote}
+                                onChange={(e) => setPipeNote(e.target.value)}
+                                className="p-2 border rounded flex-grow"
+                                placeholder="Notes (e.g., Condition)"
+                            />
+                            <button
+                                onClick={handleAssignPipe}
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                Assign
+                            </button>
+                        </div>
+                        <table className="min-w-full">
+                            <thead>
+                                <tr className="bg-gray-200">
+                                    <th className="p-3 text-left">Type</th>
+                                    <th className="p-3 text-left">Quantity</th>
+                                    <th className="p-3 text-left">Notes</th>
+                                    <th className="p-3 text-left">Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {job.assignedPipes && job.assignedPipes.length > 0 ? (
+                                    job.assignedPipes.map((pipe, index) => (
+                                        <tr key={index} className="border-t">
+                                            <td className="p-3">
+                                                {pipe.pipeType === 'polyPipe' ? 'Poly Pipe' : 
+                                                 pipe.pipeType === 'layflat10' ? '10" Layflat Hose' : 
+                                                 pipe.pipeType === 'layflat12' ? '12" Layflat Hose' : 'Crossings'}
+                                            </td>
+                                            <td className="p-3">{pipe.quantity} {pipe.unit === "count" ? "" : pipe.unit}</td>
+                                            <td className="p-3">{pipe.notes || '-'}</td>
+                                            <td className="p-3">{pipe.timestamp}</td>
+                                        </tr>
+                                    ))
+                                ) : (
+                                    <tr>
+                                        <td colSpan="4" className="p-3 text-center text-gray-500">
+                                            No pipes/crossings assigned
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div className="bg-white p-6 rounded shadow">
+                        <h2 className="text-xl font-semibold mb-4">Assigned Equipment</h2>
+                        <div className="mb-4 flex gap-4 no-print">
+                            <select
+                                value={selectedInventory}
+                                onChange={(e) => setSelectedInventory(e.target.value)}
+                                className="p-2 border rounded"
+                            >
+                                <option value="">Select Equipment</option>
+                                {inventory.filter(item => item.status === "Off Job").map(item => (
+                                    <option key={item.id} value={item.id}>{item.name} ({item.type})</option>
+                                ))}
+                            </select>
+                            <input
+                                type="text"
+                                value={inventoryNote}
+                                onChange={(e) => setInventoryNote(e.target.value)}
+                                className="p-2 border rounded"
+                                placeholder="Equipment note (e.g., Needs maintenance)"
+                            />
+                            <button
+                                onClick={handleAssignInventory}
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                Assign
+                            </button>
+                        </div>
+                        <table className="min-w-full">
+                            <thead>
+                                <tr className="bg-gray-200">
+                                    <th className="p-3 text-left">Name</th>
+                                    <th className="p-3 text-left">Type</th>
+                                    <th className="p-3 text-left">Status</th>
+                                    <th className="p-3 text-left">Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {job.assignedInventory && job.assignedInventory.length > 0 ? (
+                                    job.assignedInventory.map((item, index) => {
+                                        const inventoryItem = inventory.find(i => i.id === item.inventoryId);
+                                        return (
+                                            <tr key={index} className="border-t">
+                                                <td className="p-3">{inventoryItem ? inventoryItem.name : '-'}</td>
+                                                <td className="p-3">{inventoryItem ? inventoryItem.type : '-'}</td>
+                                                <td className="p-3">{inventoryItem ? inventoryItem.status : '-'}</td>
+                                                <td className="p-3">{item.notes || '-'}</td>
+                                            </tr>
+                                        );
+                                    })
+                                ) : (
+                                    <tr>
+                                        <td colSpan="4" className="p-3 text-center text-gray-500">
+                                            No equipment assigned
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        };
+
+        const InventoryManagement = ({ user, inventory, pipeInventory, addInventory, updateInventory, deleteInventory, updatePipeInventory, onBack }) => {
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [editingItem, setEditingItem] = useState(null);
+            const [showPipeEdit, setShowPipeEdit] = useState(false);
+            const [searchTerm, setSearchTerm] = useState("");
+            const [statusFilter, setStatusFilter] = useState("all");
+
+            const handleAdd = (item) => {
+                addInventory(item);
+                setShowAddForm(false);
+            };
+
+            const handleEdit = (item) => {
+                updateInventory(item);
+                setEditingItem(null);
+            };
+
+            const filteredInventory = inventory.filter(item => {
+                const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
+                const matchesStatus = statusFilter === "all" || 
+                    (statusFilter === "available" && item.status === "Off Job") ||
+                    (statusFilter === "onJob" && item.status === "On Job") ||
+                    (statusFilter === "down" && item.status === "Down");
+                return matchesSearch && matchesStatus;
+            });
+
+            return (
+                <div className="p-6">
+                    <div className="flex justify-between items-center mb-6 no-print">
+                        <h1 className="text-3xl font-bold">Inventory Management</h1>
+                        <button
+                            onClick={onBack}
+                            className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
+                        >
+                            Back to Dashboard
+                        </button>
+                    </div>
+                    <div className="mb-6">
+                        <h2 className="text-2xl font-semibold mb-4">Pipe & Crossings Inventory</h2>
+                        <div className="bg-white p-6 rounded shadow mb-4">
+                            <table className="min-w-full">
+                                <thead>
+                                    <tr className="bg-gray-200">
+                                        <th className="p-3 text-left">Type</th>
+                                        <th className="p-3 text-left">Total Available</th>
+                                        {user.role === "admin" && <th className="p-3 text-left no-print">Actions</th>}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr className="border-t">
+                                        <td className="p-3">Poly Pipe</td>
+                                        <td className="p-3">{pipeInventory.polyPipe.toFixed(2)} miles</td>
+                                        {user.role === "admin" && (
+                                            <td className="p-3 no-print">
+                                                <button
+                                                    onClick={() => setShowPipeEdit(true)}
+                                                    className="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </td>
+                                        )}
+                                    </tr>
+                                    <tr className="border-t">
+                                        <td className="p-3">10" Layflat Hose</td>
+                                        <td className="p-3">{pipeInventory.layflat10.toFixed(2)} miles</td>
+                                        {user.role === "admin" && (
+                                            <td className="p-3 no-print">
+                                                <button
+                                                    onClick={() => setShowPipeEdit(true)}
+                                                    className="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </td>
+                                        )}
+                                    </tr>
+                                    <tr className="border-t">
+                                        <td className="p-3">12" Layflat Hose</td>
+                                        <td className="p-3">{pipeInventory.layflat12.toFixed(2)} miles</td>
+                                        {user.role === "admin" && (
+                                            <td className="p-3 no-print">
+                                                <button
+                                                    onClick={() => setShowPipeEdit(true)}
+                                                    className="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </td>
+                                        )}
+                                    </tr>
+                                    <tr className="border-t">
+                                        <td className="p-3">Crossings</td>
+                                        <td className="p-3">{pipeInventory.crossings}</td>
+                                        {user.role === "admin" && (
+                                            <td className="p-3 no-print">
+                                                <button
+                                                    onClick={() => setShowPipeEdit(true)}
+                                                    className="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600"
+                                                >
+                                                    Edit
+                                                </button>
+                                            </td>
+                                        )}
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        {showPipeEdit && user.role === "admin" && (
+                            <PipeInventoryForm 
+                                pipeInventory={pipeInventory}
+                                onSubmit={(totals) => {
+                                    updatePipeInventory(totals);
+                                    setShowPipeEdit(false);
+                                }}
+                                onCancel={() => setShowPipeEdit(false)}
+                            />
+                        )}
+                    </div>
+                    <div>
+                        <h2 className="text-2xl font-semibold mb-4">Equipment Inventory</h2>
+                        {user.role === "admin" && (
+                            <div className="mb-4 no-print">
+                                <button
+                                    onClick={() => setShowAddForm(true)}
+                                    className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                                >
+                                    Add Equipment
+                                </button>
+                            </div>
+                        )}
+                        <div className="mb-4 flex gap-4 no-print">
+                            <input
+                                type="text"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="p-2 border rounded"
+                                placeholder="Search by equipment name..."
+                            />
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                                className="p-2 border rounded"
+                            >
+                                <option value="all">All</option>
+                                <option value="available">Available (Off Job)</option>
+                                <option value="onJob">On Job</option>
+                                <option value="down">Down</option>
+                            </select>
+                        </div>
+                        {showAddForm && user.role === "admin" && (
+                            <InventoryForm 
+                                userRole={user.role}
+                                onSubmit={handleAdd} 
+                                onCancel={() => setShowAddForm(false)} 
+                            />
+                        )}
+                        {editingItem && (
+                            <InventoryForm 
+                                userRole={user.role}
+                                item={editingItem} 
+                                onSubmit={handleEdit} 
+                                onCancel={() => setEditingItem(null)} 
+                            />
+                        )}
+                        <div className="bg-white rounded shadow overflow-x-auto">
+                            <table className="min-w-full">
+                                <thead>
+                                    <tr className="bg-gray-200">
+                                        <th className="p-3 text-left">Name</th>
+                                        <th className="p-3 text-left">Type</th>
+                                        <th className="p-3 text-left">Status</th>
+                                        <th className="p-3 text-left">Condition</th>
+                                        <th className="p-3 text-left">Details</th>
+                                        <th className="p-3 text-left">Tag Expiration</th>
+                                        <th className="p-3 text-left">Notes</th>
+                                        <th className="p-3 text-left">Last Updated</th>
+                                        <th className="p-3 text-left no-print">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredInventory.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="9" className="p-3 text-center text-gray-500">
+                                                No equipment matches the search criteria
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredInventory.map((item) => (
+                                            <tr key={item.id} className="border-t">
+                                                <td className="p-3">{item.name}</td>
+                                                <td className="p-3">{item.type}</td>
+                                                <td className="p-3">{item.status}</td>
+                                                <td className="p-3">{item.condition}</td>
+                                                <td className="p-3">{item.details || '-'}</td>
+                                                <td className="p-3">{item.tagExpiration || '-'}</td>
+                                                <td className="p-3">{item.notes || '-'}</td>
+                                                <td className="p-3">{item.lastUpdated}</td>
+                                                <td className="p-3 no-print">
+                                                    <button
+                                                        onClick={() => setEditingItem(item)}
+                                                        className="bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 mr-2"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    {user.role === "admin" && (
+                                                        <button
+                                                            onClick={() => deleteInventory(item.id)}
+                                                            className="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const InventoryForm = ({ userRole, item, onSubmit, onCancel }) => {
+            const [formData, setFormData] = useState(
+                item || {
+                    name: "",
+                    type: "",
+                    status: "Off Job",
+                    condition: "New",
+                    details: "",
+                    tagExpiration: "",
+                    notes: ""
+                }
+            );
+
+            const handleChange = (e) => {
+                setFormData({ ...formData, [e.target.name]: e.target.value });
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onSubmit({ ...formData, id: item ? item.id : undefined });
+            };
+
+            const isManager = userRole === "manager";
+
+            return (
+                <div className="bg-white p-6 rounded shadow mb-6 no-print">
+                    <h2 className="text-xl font-semibold mb-4">{item ? "Edit Equipment" : "Add Equipment"}</h2>
+                    <form onSubmit={handleSubmit}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-gray-700">Name</label>
+                                <input
+                                    type="text"
+                                    name="name"
+                                    value={formData.name}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    required
+                                    disabled={isManager}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Type</label>
+                                {isManager ? (
+                                    <input
+                                        type="text"
+                                        value={formData.type}
+                                        className="w-full p-2 border rounded bg-gray-100"
+                                        disabled
+                                    />
+                                ) : (
+                                    <select
+                                        name="type"
+                                        value={formData.type}
+                                        onChange={handleChange}
+                                        className="w-full p-2 border rounded"
+                                        required
+                                    >
+                                        <option value="">Select Type</option>
+                                        <option value="Truck">Truck</option>
+                                        <option value="Hose">Hose</option>
+                                        <option value="Pump">Pump</option>
+                                        <option value="Trailer">Trailer</option>
+                                        <option value="Poly Pump">Poly Pump</option>
+                                        <option value="325 Pump">325 Pump</option>
+                                        <option value="600">600</option>
+                                        <option value="Dog House">Dog House</option>
+                                        <option value="Manifold">Manifold</option>
+                                    </select>
+                                )}
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Status</label>
+                                <select
+                                    name="status"
+                                    value={formData.status}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                >
+                                    <option value="Off Job">Off Job</option>
+                                    <option value="On Job">On Job</option>
+                                    <option value="Down">Down</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Condition</label>
+                                <select
+                                    name="condition"
+                                    value={formData.condition}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                >
+                                    <option value="New">New</option>
+                                    <option value="Used">Used</option>
+                                    <option value="Needs Repair">Needs Repair</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Details (e.g., Footage in Miles)</label>
+                                <input
+                                    type="text"
+                                    name="details"
+                                    value={formData.details}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    placeholder="e.g., 0.04"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Tag Expiration</label>
+                                <input
+                                    type="text"
+                                    name="tagExpiration"
+                                    value={formData.tagExpiration}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    placeholder="e.g., 6/15/25"
+                                    disabled={isManager}
+                                />
+                            </div>
+                        </div>
+                        <div className="mt-4">
+                            <label className="block text-gray-700">Notes</label>
+                            <textarea
+                                name="notes"
+                                value={formData.notes}
+                                onChange={handleChange}
+                                className="w-full p-2 border rounded"
+                                rows="4"
+                            ></textarea>
+                        </div>
+                        <div className="mt-4 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                {item ? "Save Changes" : "Add Item"}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        };
+
+        const PipeInventoryForm = ({ pipeInventory, onSubmit, onCancel }) => {
+            const [formData, setFormData] = useState({
+                polyPipe: pipeInventory.polyPipe.toString(),
+                layflat10: pipeInventory.layflat10.toString(),
+                layflat12: pipeInventory.layflat12.toString(),
+                crossings: pipeInventory.crossings.toString()
+            });
+
+            const handleChange = (e) => {
+                setFormData({ ...formData, [e.target.name]: e.target.value });
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onSubmit(formData);
+            };
+
+            return (
+                <div className="bg-white p-6 rounded shadow mb-6 no-print">
+                    <h2 className="text-xl font-semibold mb-4">Edit Pipe & Crossings Inventory</h2>
+                    <form onSubmit={handleSubmit}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-gray-700">Poly Pipe (miles)</label>
+                                <input
+                                    type="number"
+                                    name="polyPipe"
+                                    value={formData.polyPipe}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    min="0"
+                                    step="0.01"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">10" Layflat Hose (miles)</label>
+                                <input
+                                    type="number"
+                                    name="layflat10"
+                                    value={formData.layflat10}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    min="0"
+                                    step="0.01"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">12" Layflat Hose (miles)</label>
+                                <input
+                                    type="number"
+                                    name="layflat12"
+                                    value={formData.layflat12}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    min="0"
+                                    step="0.01"
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-gray-700">Crossings (count)</label>
+                                <input
+                                    type="number"
+                                    name="crossings"
+                                    value={formData.crossings}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    min="0"
+                                    step="1"
+                                    required
+                                />
+                            </div>
+                        </div>
+                        <div className="mt-4 flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={onCancel}
+                                className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                            >
+                                Save Changes
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
