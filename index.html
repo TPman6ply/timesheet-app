@@ -46,11 +46,12 @@
                 { username: "manager", password: "manager123", role: "manager" }
             ]);
             const [jobs, setJobs] = useState([]);
+            const [archivedJobs, setArchivedJobs] = useState([]);
             const [inventory, setInventory] = useState([
-                { id: 1, name: "Truck #1", type: "Truck", status: "Off Job", condition: "New", tagExpiration: "6/15/25", notes: "", lastUpdated: new Date().toLocaleString() },
-                { id: 2, name: "Hose #1", type: "Hose", status: "Off Job", condition: "Used", details: "0.04", notes: "", lastUpdated: new Date().toLocaleString() },
-                { id: 3, name: "Pump #1", type: "Pump", status: "Down", condition: "Needs Repair", tagExpiration: "5/10/25", notes: "", lastUpdated: new Date().toLocaleString() }
-            ]);
+                { id: 1, name: "Truck #1", type: "Truck", status: "Off Job", condition: "New", tagExpiration: "6/15/25", notes: "", lastUpdated: new Date().toLocaleString(), vin: "1HGCM82633A004352" },
+                { id: 2, name: "Hose #1", type: "Hose", status: "Off Job", condition: "Used", details: "0.04", notes: "", lastUpdated: new Date().toLocaleString(), vin: "" },
+                { id: 3, name: "Pump #1", type: "Pump", status: "Down", condition: "Needs Repair", tagExpiration: "5/10/25", notes: "", lastUpdated: new Date().toLocaleString(), vin: "" }
+            ].map(item => ({ ...item, type: item.type === "600" ? "600 Pump T4" : item.type })));
             const [pipeInventory, setPipeInventory] = useState({
                 polyPipe: 10.0,
                 layflat10: 10.0,
@@ -73,6 +74,18 @@
                 setUsers([...users, newUser]);
             };
 
+            const deleteUser = (username) => {
+                if (username === user.name) {
+                    alert("Cannot delete the current user");
+                    return;
+                }
+                if (username === "admin") {
+                    alert("Cannot delete the default admin user");
+                    return;
+                }
+                setUsers(users.filter(u => u.username !== username));
+            };
+
             const addJob = (job) => {
                 setJobs([...jobs, { ...job, id: jobs.length + 1, status: "running", lastUpdated: new Date().toLocaleString(), notesList: [], assignedPipes: [], assignedInventory: [] }]);
             };
@@ -86,6 +99,8 @@
                     if (job.id === jobId) {
                         const newStatus = job.status === "running" ? "completed" : "running";
                         if (newStatus === "completed") {
+                            // Archive job
+                            setArchivedJobs([...archivedJobs, { ...job, status: "completed", archivedAt: new Date().toLocaleString() }]);
                             // Reset equipment to Off Job
                             setInventory(inventory.map(item => 
                                 job.assignedInventory.some(ai => ai.inventoryId === item.id) 
@@ -104,7 +119,7 @@
                                         const miles = pipe.unit === "feet" ? pipe.quantity / 5280 : pipe.quantity;
                                         setPipeInventory(prev => ({
                                             ...prev,
-                                            [pipe.pipeType]: prev[pipe.pipeType] + miles
+                                            [pipe.pipeType]: prev[pipeType] + miles
                                         }));
                                     }
                                 });
@@ -172,6 +187,47 @@
                 setInventory(inventory.filter(item => item.id !== id));
             };
 
+            const importInventory = (csvData) => {
+                const lines = csvData.split('\n').filter(line => line.trim());
+                if (lines.length < 1) {
+                    alert("Invalid CSV: No data found");
+                    return;
+                }
+                const headers = lines[0].split(',').map(h => h.trim());
+                const expectedHeaders = ["id","name","type","status","condition","details","tagExpiration","notes","lastUpdated","vin"];
+                if (!headers.every((h, i) => h === expectedHeaders[i])) {
+                    alert("Invalid CSV: Header mismatch");
+                    return;
+                }
+                const newInventory = [];
+                const existingNames = new Set(inventory.map(item => item.name.toLowerCase()));
+                for (let i = 1; i < lines.length; i++) {
+                    const values = lines[i].split(',').map(v => v.trim());
+                    if (values.length !== headers.length) continue;
+                    const item = {
+                        id: parseInt(values[0]) || inventory.length + newInventory.length + 1,
+                        name: values[1],
+                        type: values[2] === "600" ? "600 Pump T4" : values[2],
+                        status: values[3] || "Off Job",
+                        condition: values[4] || "New",
+                        details: values[5] || "",
+                        tagExpiration: values[6] || "",
+                        notes: values[7] || "",
+                        lastUpdated: values[8] || new Date().toLocaleString(),
+                        vin: values[9] || ""
+                    };
+                    if (!item.name) continue;
+                    if (existingNames.has(item.name.toLowerCase()) || newInventory.some(ni => ni.name.toLowerCase() === item.name.toLowerCase())) {
+                        alert(`Duplicate name detected: ${item.name}`);
+                        return;
+                    }
+                    newInventory.push(item);
+                    existingNames.add(item.name.toLowerCase());
+                }
+                setInventory([...inventory, ...newInventory]);
+                alert("Inventory imported successfully");
+            };
+
             const updatePipeInventory = (newTotals) => {
                 setPipeInventory({
                     polyPipe: Math.max(0, parseFloat(newTotals.polyPipe) || 0),
@@ -189,7 +245,9 @@
                             setUser={setUser} 
                             users={users}
                             addUser={addUser}
+                            deleteUser={deleteUser}
                             jobs={jobs} 
+                            archivedJobs={archivedJobs}
                             addJob={addJob} 
                             updateJob={updateJob} 
                             toggleJobStatus={toggleJobStatus}
@@ -200,6 +258,7 @@
                             addInventory={addInventory}
                             updateInventory={updateInventory}
                             deleteInventory={deleteInventory}
+                            importInventory={importInventory}
                             updatePipeInventory={updatePipeInventory}
                         />
                     ) : (
@@ -253,7 +312,7 @@
             );
         };
 
-        const Dashboard = ({ user, setUser, users, addUser, jobs, addJob, updateJob, toggleJobStatus, inventory, pipeInventory, assignPipe, assignInventory, addInventory, updateInventory, deleteInventory, updatePipeInventory }) => {
+        const Dashboard = ({ user, setUser, users, addUser, deleteUser, jobs, archivedJobs, addJob, updateJob, toggleJobStatus, inventory, pipeInventory, assignPipe, assignInventory, addInventory, updateInventory, deleteInventory, importInventory, updatePipeInventory }) => {
             const [showCreateJob, setShowCreateJob] = useState(false);
             const [selectedJobId, setSelectedJobId] = useState(null);
             const [showInventory, setShowInventory] = useState(false);
@@ -263,8 +322,10 @@
             if (showUserManagement && user.role === "admin") {
                 return (
                     <UserManagement
+                        user={user}
                         users={users}
                         addUser={addUser}
+                        deleteUser={deleteUser}
                         onBack={() => setShowUserManagement(false)}
                     />
                 );
@@ -279,6 +340,7 @@
                         addInventory={addInventory}
                         updateInventory={updateInventory}
                         deleteInventory={deleteInventory}
+                        importInventory={importInventory}
                         updatePipeInventory={updatePipeInventory}
                         onBack={() => setShowInventory(false)}
                     />
@@ -286,7 +348,7 @@
             }
 
             if (selectedJobId) {
-                const selectedJob = jobs.find(job => job.id === selectedJobId);
+                const selectedJob = jobs.find(job => job.id === selectedJobId) || archivedJobs.find(job => job.id === selectedJobId);
                 return (
                     <JobDetails 
                         job={selectedJob} 
@@ -297,6 +359,8 @@
                         assignPipe={assignPipe}
                         assignInventory={assignInventory}
                         onBack={() => setSelectedJobId(null)}
+                        isArchived={archivedJobs.some(job => job.id === selectedJobId)}
+                        user={user}
                     />
                 );
             }
@@ -378,20 +442,27 @@
                         </button>
                         <button
                             onClick={() => setActiveTab("completed")}
-                            className={`px-4 py-2 rounded ${activeTab === "completed" ? "bg-blue-500 text-white" : "bg-gray-200"}`}
+                            className={`px-4 py-2 rounded ${activeTab === "completed" ? "bg-blue-500 text-white" : "bg-gray-200"} mr-2`}
                         >
                             Completed Jobs
                         </button>
+                        <button
+                            onClick={() => setActiveTab("archived")}
+                            className={`px-4 py-2 rounded ${activeTab === "archived" ? "bg-blue-500 text-white" : "bg-gray-200"}`}
+                        >
+                            Archived Jobs
+                        </button>
                     </div>
                     <JobList 
-                        jobs={jobs.filter(job => job.status === activeTab)} 
+                        jobs={activeTab === "archived" ? archivedJobs : jobs.filter(job => job.status === activeTab)} 
                         onSelectJob={setSelectedJobId} 
+                        isArchived={activeTab === "archived"}
                     />
                 </div>
             );
         };
 
-        const UserManagement = ({ users, addUser, onBack }) => {
+        const UserManagement = ({ user, users, addUser, deleteUser, onBack }) => {
             const [newUser, setNewUser] = useState({
                 username: "",
                 password: "",
@@ -414,6 +485,12 @@
                 }
                 addUser(newUser);
                 setNewUser({ username: "", password: "", role: "manager" });
+            };
+
+            const handleDelete = (username) => {
+                if (window.confirm(`Are you sure you want to delete user ${username}?`)) {
+                    deleteUser(username);
+                }
             };
 
             return (
@@ -482,6 +559,7 @@
                                 <tr className="bg-gray-200">
                                     <th className="p-3 text-left">Username</th>
                                     <th className="p-3 text-left">Role</th>
+                                    <th className="p-3 text-left no-print">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -489,6 +567,16 @@
                                     <tr key={index} className="border-t">
                                         <td className="p-3">{u.username}</td>
                                         <td className="p-3">{u.role}</td>
+                                        <td className="p-3 no-print">
+                                            {user.role === "admin" && (
+                                                <button
+                                                    onClick={() => handleDelete(u.username)}
+                                                    className="bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600"
+                                                >
+                                                    Delete
+                                                </button>
+                                            )}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -607,7 +695,7 @@
             );
         };
 
-        const JobList = ({ jobs, onSelectJob }) => {
+        const JobList = ({ jobs, onSelectJob, isArchived }) => {
             return (
                 <div className="bg-white rounded shadow overflow-x-auto">
                     <table className="min-w-full">
@@ -619,7 +707,7 @@
                                 <th className="p-3 text-left">Company Man</th>
                                 <th className="p-3 text-left">Phone</th>
                                 <th className="p-3 text-left">Notes</th>
-                                <th className="p-3 text-left">Last Updated</th>
+                                <th className="p-3 text-left">{isArchived ? "Archived At" : "Last Updated"}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -642,7 +730,7 @@
                                         <td className="p-3">{job.companyMan || '-'}</td>
                                         <td className="p-3">{job.phone || '-'}</td>
                                         <td className="p-3">{job.notes || '-'}</td>
-                                        <td className="p-3">{job.lastUpdated}</td>
+                                        <td className="p-3">{isArchived ? job.archivedAt : job.lastUpdated}</td>
                                     </tr>
                                 ))
                             )}
@@ -652,7 +740,7 @@
             );
         };
 
-        const JobDetails = ({ job, updateJob, toggleJobStatus, inventory, pipeInventory, assignPipe, assignInventory, onBack }) => {
+        const JobDetails = ({ job, updateJob, toggleJobStatus, inventory, pipeInventory, assignPipe, assignInventory, onBack, isArchived, user }) => {
             const [isEditing, setIsEditing] = useState(false);
             const [editedJob, setEditedJob] = useState(job);
             const [newNote, setNewNote] = useState("");
@@ -678,7 +766,7 @@
                 if (newNote.trim()) {
                     updateJob({ 
                         ...job, 
-                        notesList: [...(job.notesList || []), { text: newNote, timestamp: new Date().toLocaleString() }] 
+                        notesList: [...(job.notesList || []), { text: newNote, timestamp: new Date().toLocaleString(), user: user.name }] 
                     });
                     setNewNote("");
                 }
@@ -712,7 +800,7 @@
             return (
                 <div className="p-6 print-container">
                     <div className="flex justify-between items-center mb-6 no-print">
-                        <h1 className="text-3xl font-bold">{job.name} Details</h1>
+                        <h1 className="text-3xl font-bold">{job.name} Details {isArchived ? "(Archived)" : ""}</h1>
                         <div className="flex gap-2">
                             <button
                                 onClick={onBack}
@@ -720,15 +808,17 @@
                             >
                                 Back to Dashboard
                             </button>
-                            <button
-                                onClick={handlePrint}
-                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-                            >
-                                Print Job
-                            </button>
+                            {!isArchived && (
+                                <button
+                                    onClick={handlePrint}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Print Job
+                                </button>
+                            )}
                         </div>
                     </div>
-                    {isEditing ? (
+                    {!isArchived && isEditing ? (
                         <form onSubmit={handleSave} className="bg-white p-6 rounded shadow mb-6 no-print">
                             <h2 className="text-xl font-semibold mb-4">Edit Job</h2>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -822,113 +912,119 @@
                             <p><strong>Phone:</strong> {job.phone || '-'}</p>
                             <p><strong>Notes:</strong> {job.notes || '-'}</p>
                             <p><strong>Status:</strong> {job.status === "running" ? "Running" : "Completed"}</p>
-                            <p><strong>Last Updated:</strong> {job.lastUpdated}</p>
-                            <div className="mt-4 flex gap-2 no-print">
+                            <p><strong>{isArchived ? "Archived At" : "Last Updated"}:</strong> {isArchived ? job.archivedAt : job.lastUpdated}</p>
+                            {!isArchived && (
+                                <div className="mt-4 flex gap-2 no-print">
+                                    <button
+                                        onClick={() => setIsEditing(true)}
+                                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                    >
+                                        Edit Job
+                                    </button>
+                                    <button
+                                        onClick={() => toggleJobStatus(job.id, returnPipes)}
+                                        className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600"
+                                    >
+                                        {job.status === "running" ? "Mark as Completed" : "Reopen Job"}
+                                    </button>
+                                    {job.status === "running" && (
+                                        <label className="flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={returnPipes}
+                                                onChange={(e) => setReturnPipes(e.target.checked)}
+                                                className="mr-2"
+                                            />
+                                            Return Pipes/Crossings on Completion
+                                        </label>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    {!isArchived && (
+                        <div className="bg-white p-6 rounded shadow mb-6">
+                            <h2 className="text-xl font-semibold mb-4">Job Notes</h2>
+                            <div className="mb-4 no-print">
+                                <textarea
+                                    value={newNote}
+                                    onChange={(e) => setNewNote(e.target.value)}
+                                    className="w-full p-2 border rounded"
+                                    rows="3"
+                                    placeholder="Add a note..."
+                                ></textarea>
                                 <button
-                                    onClick={() => setIsEditing(true)}
-                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                    onClick={addNote}
+                                    className="mt-2 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
                                 >
-                                    Edit Job
+                                    Add Note
                                 </button>
-                                <button
-                                    onClick={() => toggleJobStatus(job.id, returnPipes)}
-                                    className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600"
-                                >
-                                    {job.status === "running" ? "Mark as Completed" : "Reopen Job"}
-                                </button>
-                                {job.status === "running" && (
-                                    <label className="flex items-center">
-                                        <input
-                                            type="checkbox"
-                                            checked={returnPipes}
-                                            onChange={(e) => setReturnPipes(e.target.checked)}
-                                            className="mr-2"
-                                        />
-                                        Return Pipes/Crossings on Completion
-                                    </label>
-                                )}
                             </div>
+                            {job.notesList && job.notesList.length > 0 ? (
+                                <ul className="list-disc pl-5">
+                                    {job.notesList.map((note, index) => (
+                                        <li key={index}>
+                                            {note.text} <span className="text-gray-500">({note.user}, {note.timestamp})</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <p className="text-gray-500">No notes added.</p>
+                            )}
                         </div>
                     )}
                     <div className="bg-white p-6 rounded shadow mb-6">
-                        <h2 className="text-xl font-semibold mb-4">Job Notes</h2>
-                        <div className="mb-4 no-print">
-                            <textarea
-                                value={newNote}
-                                onChange={(e) => setNewNote(e.target.value)}
-                                className="w-full p-2 border rounded"
-                                rows="3"
-                                placeholder="Add a note..."
-                            ></textarea>
-                            <button
-                                onClick={addNote}
-                                className="mt-2 bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
-                            >
-                                Add Note
-                            </button>
-                        </div>
-                        {job.notesList && job.notesList.length > 0 ? (
-                            <ul className="list-disc pl-5">
-                                {job.notesList.map((note, index) => (
-                                    <li key={index}>
-                                        {note.text} <span className="text-gray-500">({note.timestamp})</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p className="text-gray-500">No notes added.</p>
-                        )}
-                    </div>
-                    <div className="bg-white p-6 rounded shadow mb-6">
                         <h2 className="text-xl font-semibold mb-4">Assigned Pipes/Crossings</h2>
-                        <div className="mb-4 flex gap-4 flex-wrap no-print">
-                            <select
-                                value={selectedPipeType}
-                                onChange={(e) => { 
-                                    setSelectedPipeType(e.target.value);
-                                    setPipeUnit(e.target.value === "crossings" ? "count" : "miles");
-                                }}
-                                className="p-2 border rounded"
-                            >
-                                <option value="">Select Type</option>
-                                <option value="polyPipe">Poly Pipe</option>
-                                <option value="layflat10">10" Layflat Hose</option>
-                                <option value="layflat12">12" Layflat Hose</option>
-                                <option value="crossings">Crossings</option>
-                            </select>
-                            <input
-                                type="number"
-                                value={pipeQuantity}
-                                onChange={(e) => setPipeQuantity(e.target.value)}
-                                className="p-2 border rounded w-24"
-                                placeholder="Quantity"
-                                min="0"
-                                step={selectedPipeType === "crossings" ? "1" : "0.01"}
-                            />
-                            {selectedPipeType !== "crossings" && (
+                        {!isArchived && (
+                            <div className="mb-4 flex gap-4 flex-wrap no-print">
                                 <select
-                                    value={pipeUnit}
-                                    onChange={(e) => setPipeUnit(e.target.value)}
+                                    value={selectedPipeType}
+                                    onChange={(e) => { 
+                                        setSelectedPipeType(e.target.value);
+                                        setPipeUnit(e.target.value === "crossings" ? "count" : "miles");
+                                    }}
                                     className="p-2 border rounded"
                                 >
-                                    <option value="miles">Miles</option>
-                                    <option value="feet">Feet</option>
+                                    <option value="">Select Type</option>
+                                    <option value="polyPipe">Poly Pipe</option>
+                                    <option value="layflat10">10" Layflat Hose</option>
+                                    <option value="layflat12">12" Layflat Hose</option>
+                                    <option value="crossings">Crossings</option>
                                 </select>
-                            )}
-                            <input
-                                type="text"
-                                value={pipeNote}
-                                onChange={(e) => setPipeNote(e.target.value)}
-                                className="p-2 border rounded flex-grow"
-                                placeholder="Notes (e.g., Condition)"
-                            />
-                            <button
-                                onClick={handleAssignPipe}
-                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-                            >
-                                Assign
-                            </button>
-                        </div>
+                                <input
+                                    type="number"
+                                    value={pipeQuantity}
+                                    onChange={(e) => setPipeQuantity(e.target.value)}
+                                    className="p-2 border rounded w-24"
+                                    placeholder="Quantity"
+                                    min="0"
+                                    step={selectedPipeType === "crossings" ? "1" : "0.01"}
+                                />
+                                {selectedPipeType !== "crossings" && (
+                                    <select
+                                        value={pipeUnit}
+                                        onChange={(e) => setPipeUnit(e.target.value)}
+                                        className="p-2 border rounded"
+                                    >
+                                        <option value="miles">Miles</option>
+                                        <option value="feet">Feet</option>
+                                    </select>
+                                )}
+                                <input
+                                    type="text"
+                                    value={pipeNote}
+                                    onChange={(e) => setPipeNote(e.target.value)}
+                                    className="p-2 border rounded flex-grow"
+                                    placeholder="Notes (e.g., Condition)"
+                                />
+                                <button
+                                    onClick={handleAssignPipe}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Assign
+                                </button>
+                            </div>
+                        )}
                         <table className="min-w-full">
                             <thead>
                                 <tr className="bg-gray-200">
@@ -964,31 +1060,33 @@
                     </div>
                     <div className="bg-white p-6 rounded shadow">
                         <h2 className="text-xl font-semibold mb-4">Assigned Equipment</h2>
-                        <div className="mb-4 flex gap-4 no-print">
-                            <select
-                                value={selectedInventory}
-                                onChange={(e) => setSelectedInventory(e.target.value)}
-                                className="p-2 border rounded"
-                            >
-                                <option value="">Select Equipment</option>
-                                {inventory.filter(item => item.status === "Off Job").map(item => (
-                                    <option key={item.id} value={item.id}>{item.name} ({item.type})</option>
-                                ))}
-                            </select>
-                            <input
-                                type="text"
-                                value={inventoryNote}
-                                onChange={(e) => setInventoryNote(e.target.value)}
-                                className="p-2 border rounded"
-                                placeholder="Equipment note (e.g., Needs maintenance)"
-                            />
-                            <button
-                                onClick={handleAssignInventory}
-                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-                            >
-                                Assign
-                            </button>
-                        </div>
+                        {!isArchived && (
+                            <div className="mb-4 flex gap-4 no-print">
+                                <select
+                                    value={selectedInventory}
+                                    onChange={(e) => setSelectedInventory(e.target.value)}
+                                    className="p-2 border rounded"
+                                >
+                                    <option value="">Select Equipment</option>
+                                    {inventory.filter(item => item.status === "Off Job").map(item => (
+                                        <option key={item.id} value={item.id}>{item.name} ({item.type})</option>
+                                    ))}
+                                </select>
+                                <input
+                                    type="text"
+                                    value={inventoryNote}
+                                    onChange={(e) => setInventoryNote(e.target.value)}
+                                    className="p-2 border rounded"
+                                    placeholder="Equipment note (e.g., Needs maintenance)"
+                                />
+                                <button
+                                    onClick={handleAssignInventory}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Assign
+                                </button>
+                            </div>
+                        )}
                         <table className="min-w-full">
                             <thead>
                                 <tr className="bg-gray-200">
@@ -1025,7 +1123,7 @@
             );
         };
 
-        const InventoryManagement = ({ user, inventory, pipeInventory, addInventory, updateInventory, deleteInventory, updatePipeInventory, onBack }) => {
+        const InventoryManagement = ({ user, inventory, pipeInventory, addInventory, updateInventory, deleteInventory, importInventory, updatePipeInventory, onBack }) => {
             const [showAddForm, setShowAddForm] = useState(false);
             const [editingItem, setEditingItem] = useState(null);
             const [showPipeEdit, setShowPipeEdit] = useState(false);
@@ -1042,6 +1140,38 @@
                 setEditingItem(null);
             };
 
+            const exportInventory = () => {
+                const headers = ["id","name","type","status","condition","details","tagExpiration","notes","lastUpdated","vin"];
+                const csv = [
+                    headers.join(','),
+                    ...inventory.map(item => 
+                        headers.map(h => `"${(item[h] || '').toString().replace(/"/g, '""')}"`).join(',')
+                    )
+                ].join('\n');
+                const blob = new Blob([csv], { type: "text/csv" });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "inventory.csv";
+                a.click();
+                window.URL.revokeObjectURL(url);
+            };
+
+            const handleImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    importInventory(event.target.result);
+                };
+                reader.readAsText(file);
+                e.target.value = null;
+            };
+
+            const handlePrint = () => {
+                window.print();
+            };
+
             const filteredInventory = inventory.filter(item => {
                 const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
                 const matchesStatus = statusFilter === "all" || 
@@ -1052,7 +1182,7 @@
             });
 
             return (
-                <div className="p-6">
+                <div className="p-6 print-container">
                     <div className="flex justify-between items-center mb-6 no-print">
                         <h1 className="text-3xl font-bold">Inventory Management</h1>
                         <button
@@ -1147,12 +1277,33 @@
                     <div>
                         <h2 className="text-2xl font-semibold mb-4">Equipment Inventory</h2>
                         {user.role === "admin" && (
-                            <div className="mb-4 no-print">
+                            <div className="mb-4 flex gap-4 no-print">
                                 <button
                                     onClick={() => setShowAddForm(true)}
                                     className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
                                 >
                                     Add Equipment
+                                </button>
+                                <button
+                                    onClick={exportInventory}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Export Inventory
+                                </button>
+                                <label className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 cursor-pointer">
+                                    Import Inventory
+                                    <input
+                                        type="file"
+                                        accept=".csv"
+                                        onChange={handleImport}
+                                        className="hidden"
+                                    />
+                                </label>
+                                <button
+                                    onClick={handlePrint}
+                                    className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Print Inventory
                                 </button>
                             </div>
                         )}
@@ -1178,6 +1329,7 @@
                         {showAddForm && user.role === "admin" && (
                             <InventoryForm 
                                 userRole={user.role}
+                                inventory={inventory}
                                 onSubmit={handleAdd} 
                                 onCancel={() => setShowAddForm(false)} 
                             />
@@ -1185,6 +1337,7 @@
                         {editingItem && (
                             <InventoryForm 
                                 userRole={user.role}
+                                inventory={inventory}
                                 item={editingItem} 
                                 onSubmit={handleEdit} 
                                 onCancel={() => setEditingItem(null)} 
@@ -1200,6 +1353,7 @@
                                         <th className="p-3 text-left">Condition</th>
                                         <th className="p-3 text-left">Details</th>
                                         <th className="p-3 text-left">Tag Expiration</th>
+                                        <th className="p-3 text-left">VIN</th>
                                         <th className="p-3 text-left">Notes</th>
                                         <th className="p-3 text-left">Last Updated</th>
                                         <th className="p-3 text-left no-print">Actions</th>
@@ -1208,7 +1362,7 @@
                                 <tbody>
                                     {filteredInventory.length === 0 ? (
                                         <tr>
-                                            <td colSpan="9" className="p-3 text-center text-gray-500">
+                                            <td colSpan="10" className="p-3 text-center text-gray-500">
                                                 No equipment matches the search criteria
                                             </td>
                                         </tr>
@@ -1221,6 +1375,7 @@
                                                 <td className="p-3">{item.condition}</td>
                                                 <td className="p-3">{item.details || '-'}</td>
                                                 <td className="p-3">{item.tagExpiration || '-'}</td>
+                                                <td className="p-3">{item.vin || '-'}</td>
                                                 <td className="p-3">{item.notes || '-'}</td>
                                                 <td className="p-3">{item.lastUpdated}</td>
                                                 <td className="p-3 no-print">
@@ -1250,7 +1405,7 @@
             );
         };
 
-        const InventoryForm = ({ userRole, item, onSubmit, onCancel }) => {
+        const InventoryForm = ({ userRole, inventory, item, onSubmit, onCancel }) => {
             const [formData, setFormData] = useState(
                 item || {
                     name: "",
@@ -1259,7 +1414,8 @@
                     condition: "New",
                     details: "",
                     tagExpiration: "",
-                    notes: ""
+                    notes: "",
+                    vin: ""
                 }
             );
 
@@ -1269,6 +1425,18 @@
 
             const handleSubmit = (e) => {
                 e.preventDefault();
+                const isDuplicate = inventory.some(i => 
+                    i.id !== (item ? item.id : null) && 
+                    i.name.toLowerCase() === formData.name.toLowerCase()
+                );
+                if (isDuplicate) {
+                    alert("Equipment name already exists. Please choose a unique name.");
+                    return;
+                }
+                if (!formData.name || !formData.type) {
+                    alert("Name and type are required.");
+                    return;
+                }
                 onSubmit({ ...formData, id: item ? item.id : undefined });
             };
 
@@ -1315,7 +1483,8 @@
                                         <option value="Trailer">Trailer</option>
                                         <option value="Poly Pump">Poly Pump</option>
                                         <option value="325 Pump">325 Pump</option>
-                                        <option value="600">600</option>
+                                        <option value="600 Pump T3">600 Pump T3</option>
+                                        <option value="600 Pump T4">600 Pump T4</option>
                                         <option value="Dog House">Dog House</option>
                                         <option value="Manifold">Manifold</option>
                                     </select>
@@ -1370,6 +1539,17 @@
                                     disabled={isManager}
                                 />
                             </div>
+                            <div>
+                                <label className="block text-gray-700">VIN</label>
+                                <input
+                                    type="text"
+                                    name="vin"
+                                    value={formData.vin}
+                                    onChange={handleChange}
+                                    className="w-full p-2 border rounded"
+                                    placeholder="e.g., 1HGCM82633A004352"
+                                />
+                            </div>
                         </div>
                         <div className="mt-4">
                             <label className="block text-gray-700">Notes</label>
@@ -1402,102 +1582,96 @@
         };
 
         const PipeInventoryForm = ({ pipeInventory, onSubmit, onCancel }) => {
-            const [formData, setFormData] = useState({
-                polyPipe: pipeInventory.polyPipe.toString(),
-                layflat10: pipeInventory.layflat10.toString(),
-                layflat12: pipeInventory.layflat12.toString(),
-                crossings: pipeInventory.crossings.toString()
-            });
+    const [formData, setFormData] = useState({
+        polyPipe: pipeInventory.polyPipe.toString(),
+        layflat10: pipeInventory.layflat10.toString(),
+        layflat12: pipeInventory.layflat12.toString(),
+        crossings: pipeInventory.crossings.toString()
+    });
 
-            const handleChange = (e) => {
-                setFormData({ ...formData, [e.target.name]: e.target.value });
-            };
+    const handleChange = (e) => {
+        setFormData({ ...formData, [e.target.name]: e.target.value });
+    };
 
-            const handleSubmit = (e) => {
-                e.preventDefault();
-                onSubmit(formData);
-            };
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSubmit(formData);
+    };
 
-            return (
-                <div className="bg-white p-6 rounded shadow mb-6 no-print">
-                    <h2 className="text-xl font-semibold mb-4">Edit Pipe & Crossings Inventory</h2>
-                    <form onSubmit={handleSubmit}>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-gray-700">Poly Pipe (miles)</label>
-                                <input
-                                    type="number"
-                                    name="polyPipe"
-                                    value={formData.polyPipe}
-                                    onChange={handleChange}
-                                    className="w-full p-2 border rounded"
-                                    min="0"
-                                    step="0.01"
-                                    required
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-gray-700">10" Layflat Hose (miles)</label>
-                                <input
-                                    type="number"
-                                    name="layflat10"
-                                    value={formData.layflat10}
-                                    onChange={handleChange}
-                                    className="w-full p-2 border rounded"
-                                    min="0"
-                                    step="0.01"
-                                    required
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-gray-700">12" Layflat Hose (miles)</label>
-                                <input
-                                    type="number"
-                                    name="layflat12"
-                                    value={formData.layflat12}
-                                    onChange={handleChange}
-                                    className="w-full p-2 border rounded"
-                                    min="0"
-                                    step="0.01"
-                                    required
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-gray-700">Crossings (count)</label>
-                                <input
-                                    type="number"
-                                    name="crossings"
-                                    value={formData.crossings}
-                                    onChange={handleChange}
-                                    className="w-full p-2 border rounded"
-                                    min="0"
-                                    step="1"
-                                    required
-                                />
-                            </div>
-                        </div>
-                        <div className="mt-4 flex justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={onCancel}
-                                className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-                            >
-                                Save Changes
-                            </button>
-                        </div>
-                    </form>
+    return (
+        <div className="bg-white p-6 rounded shadow mb-6 no-print">
+            <h2 className="text-xl font-semibold mb-4">Edit Pipe & Crossings Inventory</h2>
+            <form onSubmit={handleSubmit}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-gray-700">Poly Pipe (miles)</label>
+                        <input
+                            type="number"
+                            name="polyPipe"
+                            value={formData.polyPipe}
+                            onChange={handleChange}
+                            className="w-full p-2 border rounded"
+                            min="0"
+                            step="0.01"
+                            required
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-gray-700">10&quot; Layflat Hose (miles)</label>
+                        <input
+                            type="number"
+                            name="layflat10"
+                            value={formData.layflat10}
+                            onChange={handleChange}
+                            className="w-full p-2 border rounded"
+                            min="0"
+                            step="0.01"
+                            required
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-gray-700">12&quot; Layflat Hose (miles)</label>
+                        <input
+                            type="number"
+                            name="layflat12"
+                            value={formData.layflat12}
+                            onChange={handleChange}
+                            className="w-full p-2 border rounded"
+                            min="0"
+                            step="0.01"
+                            required
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-gray-700">Crossings (count)</label>
+                        <input
+                            type="number"
+                            name="crossings"
+                            value={formData.crossings}
+                            onChange={handleChange}
+                            className="w-full p-2 border rounded"
+                            min="0"
+                            step="1"
+                            required
+                        />
+                    </div>
                 </div>
-            );
-        };
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
-</body>
-</html>
+                <div className="mt-4 flex justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        className="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                    >
+                        Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+};
